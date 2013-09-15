@@ -127,6 +127,16 @@ _init
 	call	RF_TX_Init
 	call	SHT15_Init
 
+	; reset values
+	movlw	.0
+	movwf	Values
+	movwf	Values+1
+	movwf	Values+2
+	movwf	Values+3
+	movwf	Values+4
+	movwf	Values+5
+	movwf	Values+6
+
 	; init done
 
 _main
@@ -187,6 +197,9 @@ _main
 	;========================================
 	; done - measure temp & humidity
 	;========================================
+
+	; inc counter
+	incf	Values+6, f
 
 
 	;========================================
