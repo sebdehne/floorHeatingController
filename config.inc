@@ -20,9 +20,9 @@
 ; RB6 - <empty>
 ; RB7 - <empty>
 ; 
-; RC0 - SHT15_PWR
-; RC1 - SHT15_SCK
-; RC2 - SHT15_DATA
+; RC0 - ChipCap2_PWR
+; RC1 - ChipCap2_SCK
+; RC2 - ChipCap2_DATA
 ; RC3 - RF_TX_PWR
 ; RC4 - RF_TX_PORT
 ; RC5 - <empty>
@@ -35,11 +35,12 @@
 
 
 ;***************************************
-; Values required by sht15.asm
+; Values required by ChipCap2.asm
 ;***************************************
-#define	SHT15_PWR			PORTC, 0
-#define	SHT15_SCK			PORTC, 1
-#define	SHT15_DATA			PORTC, 2
+#define ChipCal2_I2C_ADDR		b'01010000'
+#define	ChipCap2_PWR			PORTC, 0
+#define	ChipCap2_SCK			PORTB, 6
+#define	ChipCap2_DATA			PORTB, 4
 
 ;***************************************
 ; Values required by rf_protocol.asm

@@ -10,17 +10,16 @@
 d1				res	1
 d2				res 1
 d3				res	1
-Values			res	7 ; 2temp + 2humidity + 2light (includes low-bat bit) + 1counter
+Values			res	7 ; 2temp + 2humidity + 2light + 1counter
 
 
-	; imported from the sht15 module
-	extern	SHT15_Init			; method
-	extern	SHT15_power_on		; method
-	extern	SHT15_power_off		; method
-	extern	SHT15_get_temp		; method
-	extern	SHT15_get_humidity	; method
-	extern	SHT15_BatteryCheck	; method
-	extern	SHT15_databuffer	; two byte for results
+	; imported from the ChipCap2 module
+	extern	ChipCap2_Init			; method
+	extern	ChipCap2_power_on		; method
+	extern	ChipCap2_power_off		; method
+	extern	ChipCap2_get_all		; method
+	extern	ChipCap2_temp			; two bytes for temp
+	extern	ChipCap2_humidity		; two bytes for humidity
 	; imported from the rf_protocol_tx module
 	extern	RF_TX_PowerOn
 	extern	RF_TX_PowerOff
@@ -95,11 +94,11 @@ _init
 	MOVLW 	B'01010000'	; ADC Fosc/16
 	MOVWF 	ADCON1
 
-	; all ports to digital, except AN11 / RB5
+	; all ports to digital
 	banksel	ANSEL
 	movlw	b'00000000'
 	movwf	ANSEL
-	movlw	b'00001000'
+	movlw	b'00000000'
 	movwf	ANSELH
 
 	; Configure PortA
@@ -109,7 +108,7 @@ _init
 	
 	; Configure PortB
 	BANKSEL	TRISB
-	movlw	b'00100000' ; all out, except RB5
+	movlw	b'00000000' ; all output
 	movwf	TRISB
 	
 	; Set entire portC as output
@@ -125,10 +124,10 @@ _init
 
 	; init libraries
 	call	RF_TX_Init
-	call	SHT15_Init
+	call	ChipCap2_Init
 
 	; reset values
-	movlw	.0
+	clrw
 	movwf	Values
 	movwf	Values+1
 	movwf	Values+2
@@ -148,59 +147,49 @@ _main
 	banksel	WDTCON
 	bcf		WDTCON, SWDTEN
 
-	;========================================
-	; start - measure light level
-	;========================================
-	call	light_power_on
-	call	light_measure
-	call	light_power_off
-	;========================================
-	; done - measure light level
-	;========================================
-
 
 	;========================================
 	; start - measure temp & humidity
 	;========================================
-	call	SHT15_power_on
-	call	SHT15_get_temp
+	call	ChipCap2_power_on
+	call	ChipCap2_get_all
 
 	; move temp data into main buffer
-	banksel	SHT15_databuffer
-	movfw	SHT15_databuffer
+	banksel	ChipCap2_temp
+	movfw	ChipCap2_temp
 	banksel	Values
 	movwf	Values
-	banksel	SHT15_databuffer
-	movfw	SHT15_databuffer+1
+	banksel	ChipCap2_temp
+	movfw	ChipCap2_temp+1
 	banksel	Values
 	movwf	Values+1
-
-	call	SHT15_get_humidity
-	; move temp data into main buffer
-	banksel	SHT15_databuffer
-	movfw	SHT15_databuffer
+	; move humidity data into main buffer
+	banksel	ChipCap2_humidity
+	movfw	ChipCap2_humidity
 	banksel	Values
 	movwf	Values+2
-	banksel	SHT15_databuffer
-	movfw	SHT15_databuffer+1
+	banksel	ChipCap2_humidity
+	movfw	ChipCap2_humidity+1
 	banksel	Values
 	movwf	Values+3
-
-	call	SHT15_BatteryCheck
-	; low-battery bit goes into the first bit of the two light level bytes
-	banksel	Values
-	bsf		Values+4, 7
-	btfss	STATUS, Z
-	bcf		Values+4, 7
 		
-	call	SHT15_power_off
+	call	ChipCap2_power_off
 	;========================================
 	; done - measure temp & humidity
 	;========================================
 
+	;========================================
+	; start - measure light level
+	;========================================
+	;call	light_power_on
+	;call	light_measure
+	;call	light_power_off
+	;========================================
+	; done - measure light level
+	;========================================
+
 	; inc counter
 	incf	Values+6, f
-
 
 	;========================================
 	; start - send data over RF
