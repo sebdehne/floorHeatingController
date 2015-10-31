@@ -71,21 +71,9 @@ ChipCap2_power_on
 	; switch on device
 	banksel	PORTC
 	bsf		ChipCap2_PWR
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
-	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; after 20ms - only zeros are returned
+	call	_delay_20ms; after 40ms - only the temp is returned
+	call	_delay_20ms; need at least 60ms to get all data out
 
 	return
 
@@ -138,27 +126,18 @@ ChipCap2_get_all
 
 	call	I2C_stop_cnd
 
-;	; extract the humidity data
-;	banksel	ChipCap2_databuffer
-;	movfw	ChipCap2_databuffer
-;	movwf	ChipCap2_humidity
-;	bcf		ChipCap2_humidity, 7   ; ignore the status bit
-;	bcf		ChipCap2_humidity, 6   ;   because we are happy as long as we got 1 measurement
-;	movfw	ChipCap2_databuffer+1
-;	movwf	ChipCap2_humidity+1
+	; remove the status bits
+	banksel	ChipCap2_databuffer
+	bcf		ChipCap2_databuffer, 6
+	bcf		ChipCap2_databuffer, 7
 
-	; extract the temp data
-;	movfw	ChipCap2_databuffer+2
-;	movwf	ChipCap2_temp
-;	movfw	ChipCap2_databuffer+3
-;	movwf	ChipCap2_temp+1
 	; shift temp data two bits to the right
-;	bcf		STATUS, C
-;	rrf		ChipCap2_temp, F		; shift first byte to the right
-;	rrf		ChipCap2_temp+1, F		; shift C into the second byte
-;	bcf		STATUS, C				; and the same once more
-;	rrf		ChipCap2_temp, F		
-;	rrf		ChipCap2_temp+1, F
+	bcf		STATUS, C
+	rrf		ChipCap2_databuffer+2, F		; shift first byte to the right
+	rrf		ChipCap2_databuffer+3, F		; shift C into the second byte
+	bcf		STATUS, C				; and the same once more
+	rrf		ChipCap2_databuffer+2, F		
+	rrf		ChipCap2_databuffer+3, F
 
 	call	ChipCap2_power_off
 

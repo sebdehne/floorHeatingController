@@ -16,8 +16,7 @@ Values			res	7 ; 2temp + 2humidity + 2light + 1counter
 	; imported from the ChipCap2 module
 	extern	ChipCap2_Init			; method
 	extern	ChipCap2_get_all		; method
-	extern	ChipCap2_databuffer		; two bytes for temp
-;	extern	ChipCap2_humidity		; two bytes for humidity
+	extern	ChipCap2_databuffer		; two bytes for humidity & two bytes for temp
 	; imported from the rf_protocol_tx module
 	extern	RF_TX_PowerOn
 	extern	RF_TX_PowerOff
