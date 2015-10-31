@@ -25,13 +25,8 @@ temp						res 1
 bytes_to_read				res 1
 loop_cnt					res 1
 loop_cnt2					res 1
-ChipCap2_temp				res 2
-ChipCap2_humidity			res 2
-	global	ChipCap2_temp
-	global	ChipCap2_humidity
-
-	udata
 ChipCap2_databuffer			res 4
+	global	ChipCap2_databuffer
 
 	code
 
@@ -67,9 +62,9 @@ ChipCap2_Init
 
 ; powers on the sensor
 ChipCap2_power_on
-	global	ChipCap2_power_on
 
 	; set DATA & CLK to high
+	call	switch_to_output
 	call	sck_high
 	call	data_send_high
 
@@ -77,34 +72,64 @@ ChipCap2_power_on
 	banksel	PORTC
 	bsf		ChipCap2_PWR
 	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
+	call	_delay_20ms; wait_for_startup
 
 	return
 
 ; powers off the sensor
 ChipCap2_power_off
-	global	ChipCap2_power_off
 
 	; switch off device
 	banksel	PORTC
 	bcf		ChipCap2_PWR
 
 	; set DATA & CLK to low
+	call	switch_to_output
 	call	sck_low
 	call	data_send_low
+
+	return
+
+ChipCap2_wakeup
+	call	I2C_start_cnd
+
+	movlw	ChipCal2_I2C_ADDR		; load slave addr (7 bits)
+	movwf	temp
+	bcf		temp, 0					; set LSB to 0=write
+	call	I2C_Write
+
+	call	I2C_stop_cnd
+	
+	call	_delay_20ms
 
 	return
 
 ; reads the 4 data bytes
 ChipCap2_get_all
 	global 	ChipCap2_get_all
+	
+	call	ChipCap2_power_on
 
 	call	I2C_start_cnd
 
 	; start reading the values by sending
 	; the slave addr with the read-bit set
 	movlw	ChipCal2_I2C_ADDR		; load slave addr (7 bits)
-	bsf		W, 0					; set LSB to 1=read
 	movwf	temp
+	bsf		temp, 0					; set LSB to 1=read
 	call	I2C_Write
 	; now read all four bytes
 	movlw	.4 						; 4 data bytes
@@ -113,30 +138,29 @@ ChipCap2_get_all
 
 	call	I2C_stop_cnd
 
-	; extract the humidity data
-	banksel	ChipCap2_databuffer
-	movfw	ChipCap2_databuffer
-	bcf		W, 7   ; ignore the status bit
-	bcf		W, 6   ;   because we are happy as long as we got 1 measurement
-	movwf	ChipCap2_humidity
-	movfw	ChipCap2_databuffer+1
-	movwf	ChipCap2_humidity+1
+;	; extract the humidity data
+;	banksel	ChipCap2_databuffer
+;	movfw	ChipCap2_databuffer
+;	movwf	ChipCap2_humidity
+;	bcf		ChipCap2_humidity, 7   ; ignore the status bit
+;	bcf		ChipCap2_humidity, 6   ;   because we are happy as long as we got 1 measurement
+;	movfw	ChipCap2_databuffer+1
+;	movwf	ChipCap2_humidity+1
 
 	; extract the temp data
-	movfw	ChipCap2_databuffer+2
-	movwf	ChipCap2_temp
-	movfw	ChipCap2_databuffer+3
-	movwf	ChipCap2_temp+1
+;	movfw	ChipCap2_databuffer+2
+;	movwf	ChipCap2_temp
+;	movfw	ChipCap2_databuffer+3
+;	movwf	ChipCap2_temp+1
 	; shift temp data two bits to the right
-	bcf		STATUS, C
-	rrf		ChipCap2_temp, F		; shift first byte to the right
-	rrf		ChipCap2_temp+1, F		; shift C into the second byte
-	bcf		STATUS, C				; and the same once more
-	rrf		ChipCap2_temp, F		
-	rrf		ChipCap2_temp+1, F
+;	bcf		STATUS, C
+;	rrf		ChipCap2_temp, F		; shift first byte to the right
+;	rrf		ChipCap2_temp+1, F		; shift C into the second byte
+;	bcf		STATUS, C				; and the same once more
+;	rrf		ChipCap2_temp, F		
+;	rrf		ChipCap2_temp+1, F
 
-	; all done with the ChipCap2
-	call	I2C_Disable
+	call	ChipCap2_power_off
 
 	return
 
@@ -145,24 +169,18 @@ ChipCap2_get_all
 ; =========================================
 
 
-I2C_Setup
-
-	return
-
-I2C_Disable
-	return
-
-
 ; =========================================
 ; reads number of bytes specified in 'bytes_to_read' into ChipCap2_databuffer
 ; =========================================
 I2C_Read
+	banksel	ChipCap2_databuffer
 	movlw	ChipCap2_databuffer
 	movwf	FSR
 	bcf		STATUS, IRP
 	btfsc	ChipCap2_databuffer, 0
 	bsf		STATUS, IRP
 I2C_Read_byte
+	call	switch_to_input
 	movlw	.8
 	movwf	loop_cnt2
 I2C_Read_byte_bit
@@ -179,12 +197,13 @@ I2C_Read_byte_bit
 
 	; clear clock
 	call	sck_low
-	call	_delay_5us
+
 	; more bits to read?
 	decfsz	loop_cnt2, F
 	goto	I2C_Read_byte_bit
 
 	; send ACK
+	call	switch_to_output
 	call	data_send_low
 	call	_delay_5us
 	call	sck_high
@@ -192,7 +211,6 @@ I2C_Read_byte_bit
 	call	sck_low
 	call	_delay_5us
 
-	call	read_bit ; release data line
 	; more bytes to read?
 	incf	FSR, F
 	decfsz	bytes_to_read, F
@@ -208,6 +226,7 @@ I2C_Read_done
 ; STATUS, Z to 0 for ACK
 ; =========================================
 I2C_Write
+	call	switch_to_output
 	; prepare the loop
 	movlw	.8
 	movwf	loop_cnt
@@ -240,7 +259,8 @@ I2C_Write_loop_cnt
 	goto	I2C_Write_loop
 
 	; read ACK/NACK
-	; wait A for slave to set DATA line
+	call	switch_to_input
+	; wait for slave to set DATA line
 	call	_delay_5us
 	; rais clock
 	call	sck_high
@@ -263,11 +283,8 @@ I2C_Write_loop_cnt
 	return
 
 I2C_start_cnd
-	call	sck_high
-	call	data_send_low
-	call	_delay_5us
-	call	_delay_5us
-	
+	; both clock and data are already high
+	call	switch_to_output
 	call	data_send_low
 	call	_delay_5us
 	call	sck_low
@@ -275,11 +292,10 @@ I2C_start_cnd
 	return
 
 I2C_stop_cnd
-	call	sck_low
+	; clock is already low
+	call	switch_to_output
 	call	data_send_low
 	call	_delay_5us
-	call	_delay_5us
-
 	call	sck_high
 	call	_delay_5us
 	call	data_send_high
@@ -288,36 +304,34 @@ I2C_stop_cnd
 
 
 data_send_low
-	banksel	TRISB
-	bcf		TRISB, 4 ; DATA port becomes an output pin
 	banksel	PORTB
 	bcf		ChipCap2_DATA
 	return
-
-
 data_send_high
-	banksel	TRISB
-	bsf		TRISB, 4 ; DATA port becomes input pin, pull-up will do the work
+	banksel	PORTB
+	bsf		ChipCap2_DATA
 	return
-
-
-; reads current bit on DATA line and returns it in STATUS,Z
 read_bit
-	banksel	TRISB
-	bsf		TRISB, 4 ; DATA port becomes an input pin
 	banksel	PORTB
 	bcf		STATUS, Z
 	btfsc	ChipCap2_DATA
 	bsf		STATUS, Z
 	return
 
+; reads current bit on DATA line and returns it in STATUS,Z
+switch_to_input
+	banksel	TRISB
+	bsf		TRISB, 4 ; DATA port becomes an input pin
+	return
+switch_to_output
+	banksel	TRISB
+	bcf		TRISB, 4 ; DATA port becomes an input pin
+	return
 
 sck_high
 	banksel	PORTB
 	bsf		ChipCap2_SCK
 	return
-
-
 sck_low
 	banksel	PORTB
 	bcf		ChipCap2_SCK

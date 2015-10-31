@@ -15,11 +15,9 @@ Values			res	7 ; 2temp + 2humidity + 2light + 1counter
 
 	; imported from the ChipCap2 module
 	extern	ChipCap2_Init			; method
-	extern	ChipCap2_power_on		; method
-	extern	ChipCap2_power_off		; method
 	extern	ChipCap2_get_all		; method
-	extern	ChipCap2_temp			; two bytes for temp
-	extern	ChipCap2_humidity		; two bytes for humidity
+	extern	ChipCap2_databuffer		; two bytes for temp
+;	extern	ChipCap2_humidity		; two bytes for humidity
 	; imported from the rf_protocol_tx module
 	extern	RF_TX_PowerOn
 	extern	RF_TX_PowerOff
@@ -151,29 +149,27 @@ _main
 	;========================================
 	; start - measure temp & humidity
 	;========================================
-	call	ChipCap2_power_on
 	call	ChipCap2_get_all
 
 	; move temp data into main buffer
-	banksel	ChipCap2_temp
-	movfw	ChipCap2_temp
+	banksel	ChipCap2_databuffer
+	movfw	ChipCap2_databuffer
 	banksel	Values
 	movwf	Values
-	banksel	ChipCap2_temp
-	movfw	ChipCap2_temp+1
+	banksel	ChipCap2_databuffer
+	movfw	ChipCap2_databuffer+1
 	banksel	Values
 	movwf	Values+1
 	; move humidity data into main buffer
-	banksel	ChipCap2_humidity
-	movfw	ChipCap2_humidity
+	banksel	ChipCap2_databuffer
+	movfw	ChipCap2_databuffer+2
 	banksel	Values
 	movwf	Values+2
-	banksel	ChipCap2_humidity
-	movfw	ChipCap2_humidity+1
+	banksel	ChipCap2_databuffer
+	movfw	ChipCap2_databuffer+3
 	banksel	Values
 	movwf	Values+3
 		
-	call	ChipCap2_power_off
 	;========================================
 	; done - measure temp & humidity
 	;========================================
