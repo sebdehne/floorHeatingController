@@ -57,20 +57,22 @@ ChipCap2_Init
 	banksel	TRISB
 	bcf		TRISB, 6 ; CLK port becomes output
 
+	; set DATA & CLK to high to save power. The pull-up resistors draw current if we are low
+	call	switch_to_output
+	call	sck_high
+	call	data_send_high
+
 	call	ChipCap2_power_off
 	return
 
 ; powers on the sensor
 ChipCap2_power_on
 
-	; set DATA & CLK to high
-	call	switch_to_output
-	call	sck_high
-	call	data_send_high
-
 	; switch on device
 	banksel	PORTC
 	bsf		ChipCap2_PWR
+
+	; wait until device has booted
 	call	_delay_20ms; after 20ms - only zeros are returned
 	call	_delay_20ms; after 40ms - only the temp is returned
 	call	_delay_20ms; need at least 60ms to get all data out
@@ -84,10 +86,10 @@ ChipCap2_power_off
 	banksel	PORTC
 	bcf		ChipCap2_PWR
 
-	; set DATA & CLK to low
+	; set DATA & CLK to high
 	call	switch_to_output
-	call	sck_low
-	call	data_send_low
+	call	sck_high
+	call	data_send_high
 
 	return
 
