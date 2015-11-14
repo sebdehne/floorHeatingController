@@ -35,19 +35,22 @@
 
 
 ;***************************************
+; Switches power to the sensors
+;***************************************
+#define	PWR						PORTB, 7
+
+;***************************************
 ; Values required by ChipCap2.asm
 ;***************************************
 #define ChipCal2_I2C_ADDR		b'01010000'
-#define	ChipCap2_PWR			PORTC, 0
 #define	ChipCap2_SCK			PORTB, 6
 #define	ChipCap2_DATA			PORTB, 4
 
 ;***************************************
 ; Values required by rf_protocol.asm
 ;***************************************
-#define RF_TX_PWR               PORTC, 3
-#define RF_TX_PORT              PORTC, 4
+#define RF_TX_PORT              PORTA, 2
 #define RF_DST_ADDR             .1              ; receiver has id 1
-#define RF_SRC_ADDR             .6              ; local addr
+#define RF_SRC_ADDR             .7             ; local addr
 
 

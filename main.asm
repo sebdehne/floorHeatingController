@@ -10,16 +10,16 @@
 d1				res	1
 d2				res 1
 d3				res	1
-Values			res	7 ; 2temp + 2humidity + 2light + 1counter
+Values			res	9 ; 2temp + 2humidity + 2light + 2batvolt + 1counter
 
 
 	; imported from the ChipCap2 module
-	extern	ChipCap2_Init			; method
-	extern	ChipCap2_get_all		; method
-	extern	ChipCap2_databuffer		; two bytes for humidity & two bytes for temp
+	extern	ChipCap2_Init				; method
+	extern	ChipCap2_get_all			; method
+	extern	ChipCap2_before_power_on	; method
+	extern	ChipCap2_after_power_off	; method
+	extern	ChipCap2_databuffer			; two bytes for humidity & two bytes for temp
 	; imported from the rf_protocol_tx module
-	extern	RF_TX_PowerOn
-	extern	RF_TX_PowerOff
 	extern	MsgAddr
 	extern	MsgLen
 	extern	RF_TX_Init
@@ -46,45 +46,34 @@ _init
 	endif
 	movwf	OSCCON
 	
-	; setup option register
-	; timer pre-scaler set to 64
-	banksel	OPTION_REG
-	movlw	b'00001100'	
-	movwf	OPTION_REG
-	; configure the watch-dog timer now
-	CLRWDT
-	movlw	b'00010011' ; 65536 + enable
-	banksel	WDTCON
-	movwf	WDTCON
+	; set the OSCTUNE value now
+	banksel	OSCTUNE
+	movlw	OSCTUNE_VALUE
+	movwf	OSCTUNE
 
 	; Configure the watch-dog timer, but disable it for now
 	banksel	OPTION_REG
-		;	  ||||||||---- PS0 - Timer 0:  
-		;	  |||||||----- PS1
-		;	  ||||||------ PS2
-		;	  |||||------- PSA -  Assign prescaler to Timer0
+;	movlw	b'00001110' ; 110 == 64 pre-scaler & WDT selected
+	movlw	b'00001110' ; 111 == 128 pre-scaler & WDT selected
+		;	  ||||||||---- PS PreScale 
+		;	  |||||||----- PS PreScale
+		;	  ||||||------ PS PreScale
+		;	  |||||------- PSA -  0=Assign prescaler to Timer0 / 1=Assign prescaler to WDT
 		;	  ||||-------- TOSE - LtoH edge
 		;	  |||--------- TOCS - Timer0 uses IntClk
 		;	  ||---------- INTEDG - falling edge RB0
 		;	  |----------- NOT_RABPU - pull-ups enabled
-	movlw	b'00001110' ; 110 == 64 pre-scaler & WDT selected
 	movwf	OPTION_REG
 	banksel	WDTCON
-	movlw	b'00010010' ; 1001 == 16384 (~ 32 seconds)
-	movlw	b'00010000' ; 1000 == 8192 (= ca 16 seconds)
-	movlw	b'00001100' ; 0110 ==  2048 (~  4 seconds)
+	movlw	b'00010110' ; 1011 == 65536 ((65536 * 128 (pre-scale))/32000Hz = ~ 4,37 min)
+;	movlw	b'00001100' ; 0110 == 2048 ((65536 * 64 (pre-scale))/32000Hz = ~ 4 sec)
 	;            |||||
-	;            ||||+--- disable watchdog timer SWDTEN
+	;            ||||+--- 0=disabled watchdog timer SWDTEN
 	;            |||+---- pre-scaler WDTPS0
 	;            ||+----- pre-scaler WDTPS1
 	;            |+------ pre-scaler WDTPS2
 	;            +------- pre-scaler WDTPS3
 	movwf	WDTCON
-	
-	; set the OSCTUNE value now
-	banksel	OSCTUNE
-	movlw	OSCTUNE_VALUE
-	movwf	OSCTUNE
 
 	; Select the clock for our A/D conversations
 	BANKSEL	ADCON1
@@ -95,7 +84,7 @@ _init
 	banksel	ANSEL
 	movlw	b'00000000'
 	movwf	ANSEL
-	movlw	b'00000000'
+	movlw	b'00001000' ; AN11 is analog
 	movwf	ANSELH
 
 	; Configure PortA
@@ -105,7 +94,7 @@ _init
 	
 	; Configure PortB
 	BANKSEL	TRISB
-	movlw	b'00000000' ; all output
+	movlw	b'00100000' ; all output, but RB5/AN11 is input
 	movwf	TRISB
 	
 	; Set entire portC as output
@@ -132,6 +121,8 @@ _init
 	movwf	Values+4
 	movwf	Values+5
 	movwf	Values+6
+	movwf	Values+7
+	movwf	Values+8
 
 	; init done
 
@@ -144,6 +135,7 @@ _main
 	banksel	WDTCON
 	bcf		WDTCON, SWDTEN
 
+	call	power_on
 
 	;========================================
 	; start - measure temp & humidity
@@ -168,7 +160,6 @@ _main
 	movfw	ChipCap2_databuffer+3
 	banksel	Values
 	movwf	Values+3
-		
 	;========================================
 	; done - measure temp & humidity
 	;========================================
@@ -176,46 +167,82 @@ _main
 	;========================================
 	; start - measure light level
 	;========================================
-	;call	light_power_on
-	;call	light_measure
-	;call	light_power_off
+	call	light_measure
 	;========================================
 	; done - measure light level
 	;========================================
 
+	call	ReadBatteryVoltage
+
 	; inc counter
-	incf	Values+6, f
+	incf	Values+8, f
 
 	;========================================
 	; start - send data over RF
 	;========================================
-	call	RF_TX_PowerOn
 	; Load the value's location and send the msg
 	movlw	HIGH	Values
 	movwf	MsgAddr
 	movlw	LOW		Values
 	movwf	MsgAddr+1
-	movlw	.7
+	movlw	.9
 	movwf	MsgLen
 	; and transmit the data now
 	call	RF_TX_SendMsg
 	; done
-	call	RF_TX_PowerOff
 	;========================================
 	; done  - send data over RF
 	;========================================
 
+	call	power_off
+
 	goto	_main
 
+ReadBatteryVoltage
+	; BEGIN A/D conversation
+	BANKSEL ADCON0 ;
+	MOVLW 	B'10110101' ;Right justify,
+	MOVWF 	ADCON0 		; Vdd Vref, 0.6V-Ref, On
+	call	Delay_1ms
+	BSF 	ADCON0,GO ;Start conversion
+	BTFSC 	ADCON0,GO ;Is conversion done?
+	GOTO 	$-1       ;No, test again
+	; END A/D conversation
+	BANKSEL ADRESH
+	movfw	ADRESH
+	BANKSEL Values
+	movwf	Values+6
+	BANKSEL ADRESL
+	movfw	ADRESL
+	BANKSEL Values
+	movwf	Values+7
+	return
 
-light_power_on
+power_on
+
+	call	ChipCap2_before_power_on
+
+	; switch on devices
 	banksel	PORTB
-	bsf		PORTB, 4
+	bsf		PWR
+
+	; need to give the ChipCap IC some startup time
+	call	_delay_20ms; after 20ms - only zeros are returned
+	call	_delay_20ms; after 40ms - only the temp is returned
+	call	_delay_20ms; need at least 60ms to get all data out	return
+
 	return
-light_power_off
+
+power_off
+	; switch off devices
 	banksel	PORTB
-	bcf		PORTB, 4
+	bcf		PWR
+
+	call	ChipCap2_after_power_off
+
 	return
+
+
 light_measure
 	; BEGIN A/D conversation
 	BANKSEL ADCON0 ;
@@ -262,5 +289,79 @@ _delay_10us
 	return
 	endif
 	endif
+
+	if CLOCKSPEED == .8000000
+_delay_20ms
+			;39993 cycles
+	movlw	0x3E
+	movwf	d1
+	movlw	0x20
+	movwf	d2
+_delay_20ms_0
+	decfsz	d1, f
+	goto	$+2
+	decfsz	d2, f
+	goto	_delay_20ms_0
+
+			;3 cycles
+	goto	$+1
+	nop
+
+			;4 cycles (including call)
+	return
+	else 
+	if CLOCKSPEED == .4000000
+_delay_20ms
+			;19993 cycles
+	movlw	0x9E
+	movwf	d1
+	movlw	0x10
+	movwf	d2
+_delay_20ms_0
+	decfsz	d1, f
+	goto	$+2
+	decfsz	d2, f
+	goto	_delay_20ms_0
+
+			;3 cycles
+	goto	$+1
+	nop
+
+			;4 cycles (including call)
+	return
+	endif
+	endif
+
+
+Delay_1ms
+	if CLOCKSPEED == .4000000
+			;993 cycles
+		movlw	0xC6
+		movwf	d1
+		movlw	0x01
+		movwf	d2
+	else
+		if CLOCKSPEED == .8000000
+					;1993 cycles
+			movlw	0x8E
+			movwf	d1
+			movlw	0x02
+			movwf	d2
+		else
+			error "Unsupported clockspeed
+		endif
+	endif
+Delay_1ms_0
+	decfsz	d1, f
+	goto	$+2
+	decfsz	d2, f
+	goto	Delay_1ms_0
+
+			;3 cycles
+	goto	$+1
+	nop
+			;4 cycles (including call)
+	return
 	
+
 	end

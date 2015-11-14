@@ -2,9 +2,6 @@
 
 #include "config.inc"
 
-#ifndef ChipCap2_PWR
-	error	"ChipCap2_PWR must be defined, for example: PORTA,0"
-#endif
 #ifndef ChipCap2_SCK
 	error	"ChipCap2_SCK must be defined, for example: PORTA,0"
 #endif
@@ -52,37 +49,26 @@ ChipCap2_databuffer			res 4
 ; sensor is powered off
 ChipCap2_Init
 	global	ChipCap2_Init
-	banksel	TRISC
-	bcf		TRISC, 0 ; PWR port becomes output
 	banksel	TRISB
 	bcf		TRISB, 6 ; CLK port becomes output
 
-	call	ChipCap2_power_off
+	call	ChipCap2_after_power_off
 	return
 
 ; powers on the sensor
-ChipCap2_power_on
+ChipCap2_before_power_on
+	global ChipCap2_before_power_on
 
 	; set DATA & CLK to high
 	call	switch_to_output
 	call	sck_high
 	call	data_send_high
 
-	; switch on device
-	banksel	PORTC
-	bsf		ChipCap2_PWR
-	call	_delay_20ms; after 20ms - only zeros are returned
-	call	_delay_20ms; after 40ms - only the temp is returned
-	call	_delay_20ms; need at least 60ms to get all data out
-
 	return
 
 ; powers off the sensor
-ChipCap2_power_off
-
-	; switch off device
-	banksel	PORTC
-	bcf		ChipCap2_PWR
+ChipCap2_after_power_off
+	global ChipCap2_after_power_off
 
 	; set DATA & CLK to low
 	call	switch_to_output
@@ -109,8 +95,6 @@ ChipCap2_wakeup
 ChipCap2_get_all
 	global 	ChipCap2_get_all
 	
-	call	ChipCap2_power_on
-
 	call	I2C_start_cnd
 
 	; start reading the values by sending
@@ -138,8 +122,6 @@ ChipCap2_get_all
 	bcf		STATUS, C				; and the same once more
 	rrf		ChipCap2_databuffer+2, F		
 	rrf		ChipCap2_databuffer+3, F
-
-	call	ChipCap2_power_off
 
 	return
 
@@ -297,14 +279,13 @@ read_bit
 	bsf		STATUS, Z
 	return
 
-; reads current bit on DATA line and returns it in STATUS,Z
 switch_to_input
 	banksel	TRISB
 	bsf		TRISB, 4 ; DATA port becomes an input pin
 	return
 switch_to_output
 	banksel	TRISB
-	bcf		TRISB, 4 ; DATA port becomes an input pin
+	bcf		TRISB, 4 ; DATA port becomes an output pin
 	return
 
 sck_high

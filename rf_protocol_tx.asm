@@ -10,9 +10,6 @@
 #ifndef CLOCKSPEED
 	error	"CLOCKSPEED must be defined, for example: .8000000"
 #endif
-#ifndef	RF_TX_PWR
-	error	"RF_TX_PWR must be defined, for example: PORTA, 0"
-#endif
 #ifndef	RF_TX_PORT
 	error	"RF_TX_PORT must be defined, for example: PORTA, 0"
 #endif
@@ -48,22 +45,10 @@ d2				res	1
 RF_TX_Init
 	global	RF_TX_Init
 
-	banksel	TRISC
-	bcf		TRISC, 3 ; PORTC3 as output
-	bcf		TRISC, 4 ; PORTC4 as output
+	banksel	TRISA
+	bcf		TRISA, 2 ; PORTA2 as output
 
-	call	RF_TX_PowerOff
-	return
-RF_TX_PowerOn
-	global	RF_TX_PowerOn
-	banksel	PORTC
-	bsf		RF_TX_PWR
 	call	RF_TX_End
-	return
-RF_TX_PowerOff
-	global	RF_TX_PowerOff
-	banksel	PORTC
-	bcf		RF_TX_PWR
 	return
 	
 RF_TX_SendMsg
@@ -176,7 +161,7 @@ _f_transmit_w_done
 	return
 	
 RF_TX_End
-	banksel	PORTC
+	banksel	PORTA
 	bcf		RF_TX_PORT
 	call 	BitDelay
 	return
