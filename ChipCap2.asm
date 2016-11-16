@@ -14,7 +14,7 @@
 
 
 
-	udata_shr
+ChipCap2Data				udata 0x30 ; 11 bytes -> 0x4b
 d1							res 1
 d2							res 1
 d3							res 1
@@ -51,8 +51,10 @@ ChipCap2_Init
 	global	ChipCap2_Init
 	banksel	TRISB
 	bcf		TRISB, 6 ; CLK port becomes output
+	banksel PORTA
 
 	call	ChipCap2_after_power_off
+
 	return
 
 ; powers on the sensor
@@ -111,7 +113,6 @@ ChipCap2_get_all
 	call	I2C_stop_cnd
 
 	; remove the status bits
-	banksel	ChipCap2_databuffer
 	bcf		ChipCap2_databuffer, 6
 	bcf		ChipCap2_databuffer, 7
 
@@ -134,12 +135,9 @@ ChipCap2_get_all
 ; reads number of bytes specified in 'bytes_to_read' into ChipCap2_databuffer
 ; =========================================
 I2C_Read
-	banksel	ChipCap2_databuffer
 	movlw	ChipCap2_databuffer
 	movwf	FSR
 	bcf		STATUS, IRP
-	btfsc	ChipCap2_databuffer, 0
-	bsf		STATUS, IRP
 I2C_Read_byte
 	call	switch_to_input
 	movlw	.8
@@ -179,7 +177,6 @@ I2C_Read_byte_bit
 
 I2C_Read_done
 	return
-
 
 ; =========================================
 ; sends command in temp, and sets 
@@ -265,15 +262,12 @@ I2C_stop_cnd
 
 
 data_send_low
-	banksel	PORTB
 	bcf		ChipCap2_DATA
 	return
 data_send_high
-	banksel	PORTB
 	bsf		ChipCap2_DATA
 	return
 read_bit
-	banksel	PORTB
 	bcf		STATUS, Z
 	btfsc	ChipCap2_DATA
 	bsf		STATUS, Z
@@ -282,18 +276,18 @@ read_bit
 switch_to_input
 	banksel	TRISB
 	bsf		TRISB, 4 ; DATA port becomes an input pin
+	banksel PORTA
 	return
 switch_to_output
 	banksel	TRISB
 	bcf		TRISB, 4 ; DATA port becomes an output pin
+	banksel	PORTA
 	return
 
 sck_high
-	banksel	PORTB
 	bsf		ChipCap2_SCK
 	return
 sck_low
-	banksel	PORTB
 	bcf		ChipCap2_SCK
 	return
 

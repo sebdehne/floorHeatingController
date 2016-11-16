@@ -4,13 +4,14 @@
 	#include "config.inc" 
 	
 	__CONFIG       _CP_OFF & _CPD_OFF & _WDT_OFF & _BOR_OFF & _PWRTE_ON & _INTRC_OSC_NOCLKOUT  & _MCLRE_OFF & _FCMEN_OFF & _IESO_OFF
-	
-	
-	udata
+
+mainData		udata 0x20 ; 11 bytes -> 0x2b
 d1				res	1
 d2				res 1
 d3				res	1
-Values			res	9 ; 2temp + 2humidity + 2light + 2batvolt + 1counter
+temp			res 1
+Values			res	5 ; 2temp + 2humidity + 1heater
+
 
 
 	; imported from the ChipCap2 module
@@ -20,11 +21,19 @@ Values			res	9 ; 2temp + 2humidity + 2light + 2batvolt + 1counter
 	extern	ChipCap2_after_power_off	; method
 	extern	ChipCap2_databuffer			; two bytes for humidity & two bytes for temp
 	; imported from the rf_protocol_tx module
-	extern	MsgAddr
-	extern	MsgLen
+	extern	RfTxMsgAddr
+	extern	RfTxMsgLen
 	extern	RF_TX_Init
 	extern	RF_TX_SendMsg
-	
+	; imported from the rf_protocol_tx module
+	extern	RF_RX_Init			; method
+	extern	RF_RX_ReceiveMsg	; method
+	extern	MsgBuffer   		; variable
+	extern	RfRxMsgLen		    ; variable
+	; imported from the crc16 module:
+	extern	REG_CRC16_HI	; variable
+	extern	REG_CRC16_LO	; variable
+	extern	CRC16			; method
 
 
 Reset		CODE	0x0
@@ -51,10 +60,9 @@ _init
 	movlw	OSCTUNE_VALUE
 	movwf	OSCTUNE
 
-	; Configure the watch-dog timer, but disable it for now
+	; Configure no watch-dog timer
 	banksel	OPTION_REG
-;	movlw	b'00001110' ; 110 == 64 pre-scaler & WDT selected
-	movlw	b'00001110' ; 111 == 128 pre-scaler & WDT selected
+	movlw	b'00000000' ; 111 == 128 pre-scaler & WDT selected
 		;	  ||||||||---- PS PreScale 
 		;	  |||||||----- PS PreScale
 		;	  ||||||------ PS PreScale
@@ -65,7 +73,7 @@ _init
 		;	  |----------- NOT_RABPU - pull-ups enabled
 	movwf	OPTION_REG
 	banksel	WDTCON
-	movlw	b'00010110' ; 1011 == 65536 ((65536 * 128 (pre-scale))/32000Hz = ~ 4,37 min)
+	movlw	b'00000000' ; 1011 == 65536 ((65536 * 128 (pre-scale))/32000Hz = ~ 4,37 min)
 ;	movlw	b'00001100' ; 0110 == 2048 ((65536 * 64 (pre-scale))/32000Hz = ~ 4 sec)
 	;            |||||
 	;            ||||+--- 0=disabled watchdog timer SWDTEN
@@ -84,7 +92,7 @@ _init
 	banksel	ANSEL
 	movlw	b'00000000'
 	movwf	ANSEL
-	movlw	b'00001000' ; AN11 is analog
+	movlw	b'00000000'
 	movwf	ANSELH
 
 	; Configure PortA
@@ -94,7 +102,7 @@ _init
 	
 	; Configure PortB
 	BANKSEL	TRISB
-	movlw	b'00100000' ; all output, but RB5/AN11 is input
+	movlw	b'00000000' ; all output
 	movwf	TRISB
 	
 	; Set entire portC as output
@@ -109,6 +117,7 @@ _init
 	clrf	PORTC
 
 	; init libraries
+	call	RF_RX_Init
 	call	RF_TX_Init
 	call	ChipCap2_Init
 
@@ -119,74 +128,158 @@ _init
 	movwf	Values+2
 	movwf	Values+3
 	movwf	Values+4
-	movwf	Values+5
-	movwf	Values+6
-	movwf	Values+7
-	movwf	Values+8
 
 	; init done
-
-_main
-	; sleep
-	; watch-dog timer is used for wake-up
-	banksel	WDTCON
-	bsf		WDTCON, SWDTEN
-	SLEEP
-	banksel	WDTCON
-	bcf		WDTCON, SWDTEN
-
 	call	power_on
 
+_main
+	
+	;========================================
+	; Listen for command over RF
+	;========================================
+	; read something from the air
+	call	RF_RX_ReceiveMsg
+	
+	btfsc	STATUS, Z
+	goto	_failure_return
+
+	; 
+	; 1) Calculate CRC
+	; 
+    clrf    REG_CRC16_LO
+    clrf    REG_CRC16_HI
+    ; copy the len into temp
+    movfw	RfRxMsgLen 
+    movwf	temp
+	decf	temp, F ; do that we don't use the CRC itself in the calc
+	decf	temp, F ; do that we don't use the CRC itself in the calc
+	; configure the address to which we write the current byte
+	movlw	LOW MsgBuffer
+	movwf	FSR
+	bcf		STATUS, IRP
+_crc_loop
+	; read the byte
+	movfw	INDF
+	; calc crc
+	call	CRC16
+	; set the pointer one address forward
+	incf	FSR, F
+	; update the counter as well and test if the end was reached
+	decfsz	temp, F
+	goto	_crc_loop
+	
+	; 
+	; 2) Does CRC match?
+	; 
+	; read the 1st crc byte
+	movfw	INDF
+	SUBWF	REG_CRC16_LO, F
+	btfss	STATUS, Z
+	goto	_failure_crc
+	; set the pointer one address forward
+	incf	FSR, F
+	; read the 2nd crc byte
+	movfw	INDF
+	SUBWF	REG_CRC16_HI, F
+	btfss	STATUS, Z
+	goto	_failure_crc
+
+	; 
+	; 3) Does destination match us?
+	; 
+	; configure the address from which we read the crc
+	movlw	LOW	MsgBuffer
+	movwf	FSR
+	bcf		STATUS, IRP
+	; read dst
+	movfw	INDF
+	sublw	RF_RX_LOCAL_ADDR
+	btfsc	STATUS, Z
+	goto	_process_msg
+
+_failure_dst
+_failure_return
+_failure_crc
+	; blink short
+	call	BlinkShort
+	goto	_main_loop_cnt
+
+_process_msg
+	; 
+	; 4) process the msg - extract the command
+	; 
+	incf	FSR, F	; src
+	incf	FSR, F	; len
+	incf	FSR, F	; value
+	movfw	INDF
+	movwf	temp
+	; command is now in temp
+
+	;
+	; 5) which command is it?
+	;
+	; command 2?
+	bcf		STATUS,Z
+	movfw	temp
+	sublw	.2
+	btfsc	STATUS, Z
+	goto	_main_command_2
+
+	; command 3?
+	bcf		STATUS,Z
+	movfw	temp
+	sublw	.3
+	btfsc	STATUS, Z
+	goto	_main_command_3
+
+_main_command_1
+	goto	_main_send_ack
+_main_command_2
+	call	HeaterOn
+	goto	_main_send_ack
+_main_command_3
+	call	HeaterOff
+	goto	_main_send_ack
+	
+_main_send_ack
+	call	power_off
+	call	Delay_100ms
+	call	power_on
+	
 	;========================================
 	; start - measure temp & humidity
 	;========================================
 	call	ChipCap2_get_all
 
-	; move temp data into main buffer
-	banksel	ChipCap2_databuffer
-	movfw	ChipCap2_databuffer
-	banksel	Values
-	movwf	Values
-	banksel	ChipCap2_databuffer
-	movfw	ChipCap2_databuffer+1
-	banksel	Values
-	movwf	Values+1
 	; move humidity data into main buffer
-	banksel	ChipCap2_databuffer
+	movfw	ChipCap2_databuffer
+	movwf	Values
+	movfw	ChipCap2_databuffer+1
+	movwf	Values+1
+	; move temp data into main buffer
 	movfw	ChipCap2_databuffer+2
-	banksel	Values
 	movwf	Values+2
-	banksel	ChipCap2_databuffer
 	movfw	ChipCap2_databuffer+3
-	banksel	Values
 	movwf	Values+3
+
 	;========================================
 	; done - measure temp & humidity
 	;========================================
 
-	;========================================
-	; start - measure light level
-	;========================================
-	call	light_measure
-	;========================================
-	; done - measure light level
-	;========================================
-
-	call	ReadBatteryVoltage
-
-	; inc counter
-	incf	Values+8, f
+	; read heater status
+	movlw	.0
+	btfsc	PORTA, 5
+	movlw	.1
+	movwf	Values+4
 
 	;========================================
 	; start - send data over RF
 	;========================================
 	; Load the value's location and send the msg
-	movlw	HIGH	Values
-	movwf	MsgAddr
 	movlw	LOW		Values
-	movwf	MsgAddr+1
-	movlw	.9
-	movwf	MsgLen
+	movwf	RfTxMsgAddr
+	movlw	.5
+	movwf	RfTxMsgLen
 	; and transmit the data now
 	call	RF_TX_SendMsg
 	; done
@@ -194,28 +287,49 @@ _main
 	; done  - send data over RF
 	;========================================
 
-	call	power_off
-
+_main_loop_cnt
 	goto	_main
 
-ReadBatteryVoltage
-	; BEGIN A/D conversation
-	BANKSEL ADCON0 ;
-	MOVLW 	B'10110101' ;Right justify,
-	MOVWF 	ADCON0 		; Vdd Vref, 0.6V-Ref, On
-	call	Delay_1ms
-	BSF 	ADCON0,GO ;Start conversion
-	BTFSC 	ADCON0,GO ;Is conversion done?
-	GOTO 	$-1       ;No, test again
-	; END A/D conversation
-	BANKSEL ADRESH
-	movfw	ADRESH
-	BANKSEL Values
-	movwf	Values+6
-	BANKSEL ADRESL
-	movfw	ADRESL
-	BANKSEL Values
-	movwf	Values+7
+
+BlinkShort
+	bsf		PORTA, 4
+	call 	Delay_100ms
+	call 	Delay_100ms
+	bcf		PORTA, 4
+	call 	Delay_100ms
+	call 	Delay_100ms
+	return
+BlinkLong
+	bsf		PORTA, 4
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	bcf		PORTA, 4
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	call 	Delay_100ms
+	return
+HeaterOn
+	bsf		PORTC, 5
+	bsf		PORTA, 5
+	return
+HeaterOff
+	bcf		PORTC, 5
+	bcf		PORTA, 5
 	return
 
 power_on
@@ -223,7 +337,6 @@ power_on
 	call	ChipCap2_before_power_on
 
 	; switch on devices
-	banksel	PORTB
 	bsf		PWR
 
 	; need to give the ChipCap IC some startup time
@@ -235,34 +348,12 @@ power_on
 
 power_off
 	; switch off devices
-	banksel	PORTB
 	bcf		PWR
 
 	call	ChipCap2_after_power_off
 
 	return
 
-
-light_measure
-	; BEGIN A/D conversation
-	BANKSEL ADCON0 ;
-	MOVLW 	B'10101101' ;Right justify,
-	MOVWF 	ADCON0 		; Vdd Vref, AN11, On
-	call	_delay_10us
-	banksel	ADCON0
-	BSF 	ADCON0,GO ;Start conversion
-	BTFSC 	ADCON0,GO ;Is conversion done?
-	GOTO 	$-1       ;No, test again
-	; END A/D conversation
-	BANKSEL ADRESH
-	movfw	ADRESH
-	BANKSEL Values
-	movwf	Values+4
-	BANKSEL ADRESL
-	movfw	ADRESL
-	BANKSEL Values
-	movwf	Values+5
-	return
 
 
 ; 8Mhz
@@ -362,6 +453,24 @@ Delay_1ms_0
 	nop
 			;4 cycles (including call)
 	return
-	
+
+Delay_100ms
+			;199993 cycles
+	movlw	0x3E
+	movwf	d1
+	movlw	0x9D
+	movwf	d2
+Delay_100ms_0
+	decfsz	d1, f
+	goto	$+2
+	decfsz	d2, f
+	goto	Delay_100ms_0
+
+			;3 cycles
+	goto	$+1
+	nop
+
+			;4 cycles (including call)
+	return
 
 	end

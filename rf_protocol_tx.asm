@@ -21,19 +21,17 @@
 #endif
 
 
-	udata_shr
-MsgAddr			res	2
-MsgLen			res	1
-	global	MsgAddr
-	global	MsgLen
 
-	udata
+RfTxData		udata 0x40; 8 bytes
 Temp			res	1
 Temp2			res	1
 Counter			res	1
 d1				res	1
 d2				res	1
-
+RfTxMsgAddr		res	1
+RfTxMsgLen		res	1
+	global	RfTxMsgAddr
+	global	RfTxMsgLen
 
 	; From the crc16.asm module
 	extern	REG_CRC16_LO
@@ -47,6 +45,7 @@ RF_TX_Init
 
 	banksel	TRISA
 	bcf		TRISA, 2 ; PORTA2 as output
+	banksel	PORTA
 
 	call	RF_TX_End
 	return
@@ -67,20 +66,18 @@ RF_TX_SendMsg
 	movlw	RF_SRC_ADDR
 	call	RF_TX_SendW
 	; send the len
-	movfw	MsgLen
+	movfw	RfTxMsgLen
 	call	RF_TX_SendW
 	; send the content
 
-	movfw	MsgAddr+1
+	movfw	RfTxMsgAddr
 	movwf	FSR
 	bcf		STATUS, IRP
-	btfsc	MsgAddr, 0
-	bsf		STATUS, IRP
 RF_TX_SendMsg_Loop
 	movfw	INDF
 	call	RF_TX_SendW
 	incf	FSR, F
-	decfsz	MsgLen, F
+	decfsz	RfTxMsgLen, F
 	goto	RF_TX_SendMsg_Loop
 
 	
@@ -108,18 +105,16 @@ RF_Calc_CRC16
 	call	CRC16
 	movlw	RF_SRC_ADDR
 	call	CRC16
-	movfw	MsgLen
+	movfw	RfTxMsgLen
 	call	CRC16
 	
 	; the msg itself
-	movfw	MsgLen  ; copy the len
+	movfw	RfTxMsgLen  ; copy the len
 	movwf	Temp
 
-	movfw	MsgAddr+1
+	movfw	RfTxMsgAddr
 	movwf	FSR
 	bcf		STATUS, IRP
-	btfsc	MsgAddr, 0
-	bsf		STATUS, IRP
 RF_Calc_CRC16_Loop
 	movfw	INDF	; pick up the value at specified addr
 	call	CRC16
@@ -161,7 +156,6 @@ _f_transmit_w_done
 	return
 	
 RF_TX_End
-	banksel	PORTA
 	bcf		RF_TX_PORT
 	call 	BitDelay
 	return

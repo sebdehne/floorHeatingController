@@ -1,14 +1,13 @@
 
-	udata_shr
+	
+Crc16Data		udata 0x2c; 4 bytes
+f_crc16_index	res	1
+f_crc16_temp	res	1
 REG_CRC16_LO	res	1
 REG_CRC16_HI	res	1
 
 	global	REG_CRC16_LO
 	global	REG_CRC16_HI
-	
-	udata
-f_crc16_index	res	1
-f_crc16_temp	res	1
 
 	code
 	
