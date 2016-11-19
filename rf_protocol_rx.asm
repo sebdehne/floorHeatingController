@@ -17,32 +17,29 @@
 #endif
 
 
-#define	c_read_max_len		.15
+#define	BUFFER_LEN		15
+#define	SUBLW_BUFFER_LEN	sublw	.15	
 
-; 4Mhz:
-;#define	c_read_max_error	.1
-;#define	c_read_double		.4
-;#define	c_read_timeout		.9
 
-; 8Mhz:
-#define	c_read_max_error	.1
-#define	c_read_double		.50
-#define	c_read_timeout		.90
-
-RfRxData					udata 0x50 ; 22 bytes
-rssi						res	1
-timer						res	1
-f_read_bit_string_err_cnt	res	1
-f_read_bit_string_buf		res	1
-f_read_bit_string_buf_pos	res	1
-f_get_rssi_max_hi			res	1
-f_get_rssi_max_lo			res	1
-DelayCounter1				res	1
-DelayCounter2				res	1
-MsgBuffer					res	10
-RfRxMsgLen					res	1
-	global	MsgBuffer
+RfRxData					udata 0x50 ; 24 bytes
+RfRxMsgBuffer				res BUFFER_LEN
+RfRxMsgLen					res 1 ; counts number of bytes recorded in buffer
+BitBuffer					res 1 ; used to record bits
+BitLen						res 1 ; counts down towards zero, indicating remaining number og bits to read for this byte
+Value						res 1 ; hold the current RSSI value
+d1							res 1 ;
+d2							res 1 ;
+temp						res 2 ; 
+RfRxReceiveResult			res 1 ; return value of receive routine.
+	global	RfRxMsgBuffer
 	global	RfRxMsgLen
+	global	RfRxReceiveResult
+
+
+	; imported from the crc16 module
+	extern	REG_CRC16_LO
+	extern	REG_CRC16_HI
+	extern	CRC16
 
 	code
 
@@ -50,7 +47,7 @@ RF_RX_Init
 	global	RF_RX_Init
 
 	; configure comparator module C1
-	banksel	ANSEL
+	banksel	ANSEL ; 
 	BSF		ANSEL, ANS0	; C1IN+
 	BSF		ANSEL, ANS1	; C12IN0-
 	banksel	TRISA
@@ -64,258 +61,267 @@ RF_RX_Init
 	
 	return
 
+;
+; RfRxReceiveResult == 1 -> Success
+; RfRxReceiveResult == 2 -> Error, in the middle of a byte
+; RfRxReceiveResult == 3 -> buffer overflow
+; RfRxReceiveResult == 4 -> message length too low
+; RfRxReceiveResult == 5 -> invalid crc16
 RF_RX_ReceiveMsg
 	global	RF_RX_ReceiveMsg
-	
-	; try to read a message from the air
-	call	RF_RX_ReadBitString ; perform reading now
-	; Done reading
-	
-	bcf		STATUS, Z
-	btfss	rssi, 6 
-	goto	RF_RX_ReceiveMsg_error
-	
-	; test that RfRxMsgLen != 0
-	movfw	RfRxMsgLen
-	ANDLW	0xFF
-	goto	RF_RX_ReceiveMsg_done
 
-RF_RX_ReceiveMsg_error	
-	bsf		STATUS, Z
+	; read message from the air into RfRxMsgBuffer
+	call	ReadMessage
+
+	; only continue if RfRxReceiveResult == 1
+	movfw	RfRxReceiveResult
+	sublw	.1
+	btfss	STATUS, Z
 	goto	RF_RX_ReceiveMsg_done
+	
+	; validate message length; need at least 6: DST, SRC, LEN, MSG1, CRC16, CRC16
+	movfw	RfRxMsgLen
+	sublw	.6
+	btfss	STATUS, C
+	goto	RF_RX_ReceiveMsg_msg_len_ok  ; message len > 6
+	btfsc	STATUS, Z
+	goto	RF_RX_ReceiveMsg_msg_len_ok	 ; message len == 6
+	movlw	.4							 ; message len < 6
+	movwf	RfRxReceiveResult
+	goto	RF_RX_ReceiveMsg_done
+RF_RX_ReceiveMsg_msg_len_ok
+
+	;
+	; validate CRC16 
+	;
+    clrf    REG_CRC16_LO
+    clrf    REG_CRC16_HI
+    movfw	RfRxMsgLen
+    movwf	temp
+	decf	temp, F ; do that we don't use the CRC itself in the calc
+	decf	temp, F ; do that we don't use the CRC itself in the calc
+	; configure the address to which we write the current byte
+	movlw	LOW	RfRxMsgBuffer
+	movwf	FSR
+	bcf		STATUS, IRP
+RF_RX_ReceiveMsg_crc_loop
+	movfw	INDF
+	call	CRC16
+	incf	FSR, F
+	decfsz	temp, F
+	goto	RF_RX_ReceiveMsg_crc_loop
+	
+	; 
+	; 2) Does CRC match?
+	; 
+	; read the 1st crc byte
+	movfw	INDF
+	SUBWF	REG_CRC16_LO, F
+	btfss	STATUS, Z
+	goto	RF_RX_ReceiveMsg_crc_error
+	; set the pointer one address forward
+	incf	FSR, F
+	; read the 2nd crc byte
+	movfw	INDF
+	SUBWF	REG_CRC16_HI, F
+	btfss	STATUS, Z
+	goto	RF_RX_ReceiveMsg_crc_error
+	goto	RF_RX_ReceiveMsg_crc_ok
+
+RF_RX_ReceiveMsg_crc_error
+	movlw	.5
+	movwf	RfRxReceiveResult
+	goto	RF_RX_ReceiveMsg_done
+RF_RX_ReceiveMsg_crc_ok
+
+	; done
 
 RF_RX_ReceiveMsg_done
 	return
-	
+
 ;
+; waits for a message to arrive and stores it into RfRxMsgBuffer and
+; uses RfRxMsgLen to report number of bytes received. Possible return values:
 ;
-; rssi variable bit explaination:
-; rssi, 0 => rssi (the read value)
-; rssi, 1 => currentlyReading (boolean whether we are currently busy reading or standby)
-; rssi, 2 => reading what (which value are we currently reading)
-; rssi, 3 => double (boolean to indicate whether this read cycle seems to be a double)
-; rssi, 4 => is first bit (boolean to indicate whether this seems to be the start-bit)
-; rssi, 5 => timeout detected (argument for buffer())
-; rssi, 6 => return value for both f_read_bit_string and add_buffer() (1 == OK; 0 == failure)
-; rssi, 7 => true: currently reading 1/2 of a set of encoded bits (decoding state; used in f_add_buffer())
-; upon return:
-;   RfRxMsgLen contains the length of the msg
-; 
-RF_RX_ReadBitString
-	; configure the address to which we write the current byte
-	movlw	LOW MsgBuffer
+; RfRxReceiveResult == 1 -> Success
+; RfRxReceiveResult == 2 -> Ended in the middle of a byte
+; RfRxReceiveResult == 3 -> went over BUFFER_LEN
+;
+; One complete bit (0->1 or 1->0) is assumed to take around 1ms
+ReadMessage
+	movlw	.2
+	movwf	RfRxReceiveResult
+	clrf	BitBuffer
+	clrf	RfRxMsgLen
+	movlw	.8
+	movwf	BitLen
+	movlw	LOW RfRxMsgBuffer
 	movwf	FSR
 	bcf		STATUS, IRP
-	clrf	rssi
-	clrf	RfRxMsgLen
-	incf	RfRxMsgLen, F ; we count 1, 2, 3, etc (instead of 0, 1, 2, 3)
-	movlw	d'8'
-	movwf	f_read_bit_string_buf_pos
-f_read_bit_string_loop
-	call	RF_RX_GetRSSI
-	btfss	rssi, 1
-	goto	_not_reading
-	goto	_reading
-_not_reading
-	btfss	rssi, 0
-	goto	f_read_bit_string_loop ; we are not reading and have received a 0
-_switch_to_reading
-	clrf	timer
-	incf	timer, F
-	bsf		rssi, 1 ; currentlyReading => 1
-	bsf		rssi, 2 ; readingValue HI
-	bsf		rssi, 4 ; is first bit
-	movlw	c_read_max_error          ; pre-load the error-counter
-	movwf	f_read_bit_string_err_cnt
-	goto	f_read_bit_string_loop
-_reading
-	INCF	timer, F
-	btfsc	rssi, 2
-	goto	_reading_high
-_reading_low
-	btfss	rssi, 0
-	goto	_reading_low_continue
-_reading_low_switch_to_hi
-	; can we tolerate this as an error
-	decfsz	f_read_bit_string_err_cnt, F
-	goto	f_read_bit_string_loop    ; we are inside the toleranse range, skip event
-	call	f_buffer_add
-	btfss	rssi, 6
-	goto	_done ; ERROR detected
-	bsf		rssi, 2 ; no error, continue
-	bcf		rssi, 3
-	clrf	timer
-	movlw	c_read_max_error          ; pre-load the error-counter
-	movwf	f_read_bit_string_err_cnt
-	;addwf	timer, F
-	goto	f_read_bit_string_loop
-_reading_low_continue
-	; check for double bits
-	movfw	timer
-	SUBLW	c_read_double
-	btfsc	STATUS, Z
-	bsf		rssi, 3 ; gone over double limit
-	; check for timeout
-	movfw	timer
-	SUBLW	c_read_timeout
-	btfss	STATUS, Z
-	goto	f_read_bit_string_loop ; read more
-	; timeout reached, we are finished
-	bsf		rssi, 5
-	call	f_buffer_add
-	decf	RfRxMsgLen, F
-	goto	_done ; OK, we are done: Using the return value from buffer_add
-_reading_high
-	btfss	rssi, 0
-	goto	_reading_high_switch_to_low
-_reading_high_continue
-	movfw	timer
-	SUBLW	c_read_double
-	btfsc	STATUS, Z
-	bsf		rssi, 3 ; gone over double limit
-	movfw	timer
-	SUBLW	c_read_timeout
-	btfss	STATUS, Z
-	goto	f_read_bit_string_loop ; read more
-	; timeout
-	bcf		rssi, 6 ; report failure
-	goto	_done
-_reading_high_switch_to_low
-	; can we tolerate this as an error
-	decfsz	f_read_bit_string_err_cnt, F
-	goto	f_read_bit_string_loop    ; we are inside the toleranse range, skip event
-	btfss	rssi, 4 ; Was this the first bit?
-	goto	_add    ; no it was not, add bit to buffer
-	bcf		rssi, 4 ; Yes it was. Clear the first-bit boolean
-	btfss	rssi, 3 ; Is this a double as well?
-	goto	_reading_high_switch_to_low_done ; no it was not a double, then continue reading low without adding
-	bcf		rssi, 3 ; yes it was, clear double flag to skip the first bit
-_add
-	call	f_buffer_add
-	btfss	rssi, 6
-	goto	_done ; ERROR detected
-_reading_high_switch_to_low_done
-	bcf		rssi, 2 ; going to read low
-	bcf		rssi, 3 ; 
-	clrf	timer
-	movlw	c_read_max_error          ; pre-load the error-counter
-	movwf	f_read_bit_string_err_cnt
-	;addwf	timer, F
-	goto	f_read_bit_string_loop
-_done
-	return
-f_buffer_add	; inner sub to store the read value into the buffer
-	; test for max_len
-	movfw	RfRxMsgLen
-	sublw	c_read_max_len
-	btfsc	STATUS, Z
-	goto	f_buffer_add_failure ; we went over max
-	; ----- BEGIN adding bit to buffer -----
-	btfss	rssi, 7 ; was last bit un-decoded?
-	goto	f_buffer_add_undecoded
-f_buffer_add_decoded
-	bcf		rssi, 7 ; so that we know in what state we are
-	btfss	f_read_bit_string_buf, 7
-	goto	f_buffer_add_decoded_low 
-f_buffer_add_decoded_hi              ; previous bit was a 1
-	btfsc	rssi, 2
-	goto	f_buffer_add_failure
-	bcf		f_read_bit_string_buf, 7 ; "10" -> "0"
-	goto	f_buffer_add_done	
-f_buffer_add_decoded_low             ; previous bit was a 0
-	btfss	rssi, 2
-	goto	f_buffer_add_failure
-	bsf		f_read_bit_string_buf, 7 ; "01" -> "1"
-	goto	f_buffer_add_done	
-f_buffer_add_undecoded
-	; pre-load the current bit into C
-	bcf		STATUS, C
-	btfsc	rssi, 2
-	bsf		STATUS, C
-	; shift C into the buffer
-	rrf		f_read_bit_string_buf, F
-	bsf		rssi, 7 ; so that we know in what state we are
-	goto	f_buffer_add_done
-f_buffer_add_failure
-	bcf		rssi, 6 ; failure detected during decoding
-	goto	f_buffer_add_completed
-	; ----- END adding bit to buffer -----
-f_buffer_add_done
-	btfsc	rssi, 7
-	goto	f_buffer_add_done_next
-	decfsz	f_read_bit_string_buf_pos, F
-	goto	f_buffer_add_done_next
-	; buffer register full,  store it in memory and get ready for next round
-	movlw	d'8'
-	movwf	f_read_bit_string_buf_pos
-	
-	; store the byte now
-	movfw	f_read_bit_string_buf
-	movwf	INDF
-	; set the pointer one address forward
-	incf	FSR, F
-	; update the number of bytes stores in the buffer so far
-	incf	RfRxMsgLen, F
-f_buffer_add_done_next
-	; Done adding bit, do we need to add another one?
-	bsf		rssi, 6 ; no failure at this point, set return value
-	btfss	rssi, 3 ; was it a double
-	goto	f_buffer_add_completed ; no it was not
-	btfsc	rssi, 5 ; yes it was, was it a timeout as well?
-	goto	f_buffer_add_completed ; yes. timeout & double => single add. Thus we are done
-	bcf		rssi, 3 ; no it was not, thus add a second bit to the buffer
-	goto	f_buffer_add
-f_buffer_add_completed
-	bcf		rssi, 5 ; clear input argument
-	return
-	
-; reads current status from the receiver using the RSSI port
-; set bit 0 in "rssi" to the read value (1 for hi, 0 for low)
-RF_RX_GetRSSI
-	banksel	CM1CON0
-	btfsc	CM1CON0, C1OUT
-	goto	RF_RX_GetRSSI_hi
-	goto	RF_RX_GetRSSI_lo
-RF_RX_GetRSSI_hi
-	banksel	PORTA
-	bsf		rssi, 0
-	goto	RF_RX_GetRSSI_done
-RF_RX_GetRSSI_lo
-	banksel	PORTA
-	bcf		rssi, 0
-	goto	RF_RX_GetRSSI_done
-RF_RX_GetRSSI_done	
-	return
-	
+ReadMessage_not_reading
+	call	ReadValue
+	btfss	Value, 0
+	goto	ReadMessage_not_reading
+ReadMessage_reading_bit
+	call	Delay_750us
+	call	ReadValue
+	btfss	Value, 0
+	goto	ReadMessage_reading_01
+	goto	ReadMessage_reading_10
 
-Delay_1ms
+ReadMessage_reading_01 ; wait for 1 or give up after 0,5ms / 500us / (4Mhz: 500 cycles OR 8Mhz: 1000 cycles)
 	if CLOCKSPEED == .4000000
-			;993 cycles
-		movlw	0xC6
-		movwf	DelayCounter1
-		movlw	0x01
-		movwf	DelayCounter2
-	else
-		if CLOCKSPEED == .8000000
-					;1993 cycles
-			movlw	0x8E
-			movwf	DelayCounter1
-			movlw	0x02
-			movwf	DelayCounter2
-		else
-			error "Unsupported clockspeed
-		endif
+	movlw	.22 ; 22 * 23 cycles = 506 cycles
+	else 
+	if CLOCKSPEED == .8000000
+	movlw	.45 ; 45 * 23 cycles = 1035 cycles
 	endif
-Delay_1ms_0
-	decfsz	DelayCounter1, f
+	endif
+	movwf	d1
+ReadMessage_reading_01_loop ; 22 cycles
+	decfsz	d1, F										; 1
+	goto	ReadMessage_reading_01_ntimeout		; 2
+	goto	ReadMessage_done 							; give up with RfRxReceiveResult
+ReadMessage_reading_01_ntimeout
+	call	ReadValue									; 17
+	btfss	Value, 0									; 1
+	goto	ReadMessage_reading_01_loop			; 2
+	call	RecordBitHi
+	goto	ReadMessage_reading_common
+ReadMessage_reading_10
+	; wait for 0
+	call	ReadValue
+	btfsc	Value, 0
+	goto	ReadMessage_reading_10
+	call	RecordBitLo
+	goto	ReadMessage_reading_common
+ReadMessage_reading_common
+	; test for overflow
+	movfw	RfRxReceiveResult
+	sublw	.3
+	btfsc	STATUS, Z
+	goto	ReadMessage_done			; give up with RfRxReceiveResult == 3 - overflow
+	goto	ReadMessage_reading_bit 	; continue reading
+ReadMessage_done
+	return
+
+; Adds the bit from Value,0 to the buffer
+;
+; RfRxReceiveResult == 1 -> OK
+; RfRxReceiveResult == 2 -> OK, but in the middle of a byte
+; RfRxReceiveResult == 3 -> went over BUFFER_LEN
+;
+; 28 cycles inlucing the call instruction
+RecordBitHi					; 2
+	bsf		STATUS, C		; 1
+	rrf		BitBuffer, F	; 1
+	goto	RecordBit_cnt	; 2
+RecordBitLo	
+	bcf		STATUS, C
+	rrf		BitBuffer, F
+	goto	RecordBit_cnt
+RecordBit_cnt ; 6
+	decfsz	BitLen, F	; are we done reading a whole byte?
+	goto	RecordBit_keep_reading_byte	; not done reading a whole byte
+	goto	RecordBit_record_byte
+RecordBit_keep_reading_byte
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	movlw	.2					; 1
+	movwf	RfRxReceiveResult		; 1
+	goto	RecordBit_done		; 2
+RecordBit_record_byte
+	; done reading a byte, but it into the buffer
+	movfw	BitBuffer			; 1
+	movwf	INDF				; 1
+	; prepare for the next byte
+	incf	FSR, F				; 1
+	incf	RfRxMsgLen, F		; 1
+	movlw	.8					; 1
+	movwf	BitLen				; 1
+	; test if buffer is full
+	movfw	RfRxMsgLen	
+#SUBLW_BUFFER_LEN
+	btfss	STATUS, Z			; 2
+	goto	RecordBit_record_byte_nooverfl	; 2
+	goto	RecordBit_record_byte_overflow		; 2
+RecordBit_record_byte_nooverfl
+	nop
+	movlw	.1
+	movwf	RfRxReceiveResult
+	goto	RecordBit_done
+RecordBit_record_byte_overflow
+	movlw	.3					; 1
+	movwf	RfRxReceiveResult		; 1
+	goto	RecordBit_done		; 2
+RecordBit_done
+	return
+
+; read the current RSSI value and stores it in Value,0
+; 17 cycles inlucing the call instruction
+ReadValue					; 2
+	banksel	CM1CON0			; 2
+	btfsc	CM1CON0, C1OUT  ; 2
+	goto	ReadValue_hi	; 2
+	goto	ReadValue_lo	; 2
+ReadValue_hi
+	nop
+	banksel	PORTA			; 2
+	bsf		Value,0			; 1
+	goto	ReadValue_done	; 2
+ReadValue_lo
+	banksel	PORTA			; 2
+	bcf		Value,0			; 1
+	goto	ReadValue_done	; 2
+ReadValue_done
+	return					; 2
+
+	if CLOCKSPEED == .8000000
+Delay_750us
+			;1493 cycles
+	movlw	0x2A
+	movwf	d1
+	movlw	0x02
+	movwf	d2
+Delay_750us_0
+	decfsz	d1, f
 	goto	$+2
-	decfsz	DelayCounter2, f
-	goto	Delay_1ms_0
+	decfsz	d2, f
+	goto	Delay_750us_0
 
 			;3 cycles
 	goto	$+1
 	nop
+
 			;4 cycles (including call)
 	return
+	else
+	if CLOCKSPEED == .4000000
+Delay_750us
+			;745 cycles
+	movlw	0xF8
+	movwf	d1
+Delay_750us_0
+	decfsz	d1, f
+	goto	Delay_750ns_0
+
+			;1 cycle
+	nop
+
+			;4 cycles (including call)
+	return
+	endif
+	endif
 
 	end

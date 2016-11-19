@@ -162,34 +162,7 @@ RF_TX_End
 
 _f_transmit_w
 	return
-	
 
-; 8Mhz
-	if CLOCKSPEED == .8000000
-_delay_10us
-			;16 cycles
-	movlw	0x05
-	movwf	d1
-_delay_10us_0
-	decfsz	d1, f
-	goto	_delay_10us_0
-
-			;4 cycles (including call)
-	return
-	else 
-	if .4000000
-_delay_10us
-			;6 cycles
-	goto	$+1
-	goto	$+1
-	goto	$+1
-
-			;4 cycles (including call)
-	return
-	endif
-	endif
-
-; 4Mhz
 
 BitDelay ; 0.0005 s
 	if CLOCKSPEED == .4000000

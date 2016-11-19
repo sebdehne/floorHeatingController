@@ -25,11 +25,12 @@ Values			res	5 ; 2temp + 2humidity + 1heater
 	extern	RfTxMsgLen
 	extern	RF_TX_Init
 	extern	RF_TX_SendMsg
-	; imported from the rf_protocol_tx module
+	; imported from the rf_protocol_rx module
 	extern	RF_RX_Init			; method
 	extern	RF_RX_ReceiveMsg	; method
-	extern	MsgBuffer   		; variable
+	extern	RfRxMsgBuffer  		; variable
 	extern	RfRxMsgLen		    ; variable
+	extern	RfRxReceiveResult	; variable
 	; imported from the crc16 module:
 	extern	REG_CRC16_HI	; variable
 	extern	REG_CRC16_LO	; variable
@@ -139,75 +140,38 @@ _main
 	;========================================
 	; read something from the air
 	call	RF_RX_ReceiveMsg
-	
-	btfsc	STATUS, Z
-	goto	_failure_return
+
+	movfw	RfRxReceiveResult
+	sublw	.1
+	btfss	STATUS, Z
+	goto	RfError
 
 	; 
-	; 1) Calculate CRC
-	; 
-    clrf    REG_CRC16_LO
-    clrf    REG_CRC16_HI
-    ; copy the len into temp
-    movfw	RfRxMsgLen 
-    movwf	temp
-	decf	temp, F ; do that we don't use the CRC itself in the calc
-	decf	temp, F ; do that we don't use the CRC itself in the calc
-	; configure the address to which we write the current byte
-	movlw	LOW MsgBuffer
-	movwf	FSR
-	bcf		STATUS, IRP
-_crc_loop
-	; read the byte
-	movfw	INDF
-	; calc crc
-	call	CRC16
-	; set the pointer one address forward
-	incf	FSR, F
-	; update the counter as well and test if the end was reached
-	decfsz	temp, F
-	goto	_crc_loop
-	
-	; 
-	; 2) Does CRC match?
-	; 
-	; read the 1st crc byte
-	movfw	INDF
-	SUBWF	REG_CRC16_LO, F
-	btfss	STATUS, Z
-	goto	_failure_crc
-	; set the pointer one address forward
-	incf	FSR, F
-	; read the 2nd crc byte
-	movfw	INDF
-	SUBWF	REG_CRC16_HI, F
-	btfss	STATUS, Z
-	goto	_failure_crc
-
-	; 
-	; 3) Does destination match us?
+	; Does destination match us?
 	; 
 	; configure the address from which we read the crc
-	movlw	LOW	MsgBuffer
-	movwf	FSR
-	bcf		STATUS, IRP
-	; read dst
-	movfw	INDF
+	movfw	RfRxMsgBuffer
 	sublw	RF_RX_LOCAL_ADDR
 	btfsc	STATUS, Z
 	goto	_process_msg
+	goto	_main_loop_cnt
 
-_failure_dst
-_failure_return
-_failure_crc
-	; blink short
+RfError		; blink out the result
+	movfw	RfRxReceiveResult
+	movwf	temp
+loop
 	call	BlinkShort
+	decfsz	temp, F
+	goto	loop
 	goto	_main_loop_cnt
 
 _process_msg
 	; 
 	; 4) process the msg - extract the command
 	; 
+	movlw	LOW	RfRxMsgBuffer
+	movwf	FSR
+	bcf		STATUS, IRP
 	incf	FSR, F	; src
 	incf	FSR, F	; len
 	incf	FSR, F	; value
