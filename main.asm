@@ -13,13 +13,6 @@ temp			res 1
 Values			res	5 ; 2temp + 2humidity + 1heater
 
 
-
-	; imported from the ChipCap2 module
-	extern	ChipCap2_Init				; method
-	extern	ChipCap2_get_all			; method
-	extern	ChipCap2_before_power_on	; method
-	extern	ChipCap2_after_power_off	; method
-	extern	ChipCap2_databuffer			; two bytes for humidity & two bytes for temp
 	; imported from the rf_protocol_tx module
 	extern	RfTxMsgAddr
 	extern	RfTxMsgLen
@@ -35,7 +28,11 @@ Values			res	5 ; 2temp + 2humidity + 1heater
 	extern	REG_CRC16_HI	; variable
 	extern	REG_CRC16_LO	; variable
 	extern	CRC16			; method
-
+	; imported from the SHT15 module
+	extern	SHT15_Init
+	extern	SHT15_get_temp
+	extern	SHT15_get_humidity
+	extern	SHT15_databuffer
 
 Reset		CODE	0x0
 	pagesel	_init
@@ -120,7 +117,8 @@ _init
 	; init libraries
 	call	RF_RX_Init
 	call	RF_TX_Init
-	call	ChipCap2_Init
+	call	SHT15_Init
+	;call	ChipCap2_Init
 
 	; reset values
 	clrw
@@ -134,6 +132,9 @@ _init
 	call	power_on
 
 _main
+	;call	Delay_5s
+	;movlw	.1
+	;goto	shortcut
 	
 	;========================================
 	; Listen for command over RF
@@ -149,11 +150,13 @@ _main
 	; 
 	; Does destination match us?
 	; 
-	; configure the address from which we read the crc
 	movfw	RfRxMsgBuffer
 	sublw	RF_RX_LOCAL_ADDR
 	btfsc	STATUS, Z
 	goto	_process_msg
+
+	; not for us
+	call	BlinkLong
 	goto	_main_loop_cnt
 
 RfError		; blink out the result
@@ -179,6 +182,7 @@ _process_msg
 	movwf	temp
 	; command is now in temp
 
+shortcut
 	;
 	; 5) which command is it?
 	;
@@ -213,17 +217,16 @@ _main_send_ack
 	;========================================
 	; start - measure temp & humidity
 	;========================================
-	call	ChipCap2_get_all
-
-	; move humidity data into main buffer
-	movfw	ChipCap2_databuffer
+	call	SHT15_get_temp
+	movfw	SHT15_databuffer
 	movwf	Values
-	movfw	ChipCap2_databuffer+1
+	movfw	SHT15_databuffer+1
 	movwf	Values+1
-	; move temp data into main buffer
-	movfw	ChipCap2_databuffer+2
+
+	call	SHT15_get_humidity
+	movfw	SHT15_databuffer
 	movwf	Values+2
-	movfw	ChipCap2_databuffer+3
+	movfw	SHT15_databuffer+1
 	movwf	Values+3
 
 	;========================================
@@ -298,8 +301,6 @@ HeaterOff
 
 power_on
 
-	call	ChipCap2_before_power_on
-
 	; switch on devices
 	bsf		PWR
 
@@ -313,8 +314,6 @@ power_on
 power_off
 	; switch off devices
 	bcf		PWR
-
-	call	ChipCap2_after_power_off
 
 	return
 
@@ -432,6 +431,29 @@ Delay_100ms_0
 
 			;3 cycles
 	goto	$+1
+	nop
+
+			;4 cycles (including call)
+	return
+
+
+Delay_5s
+			;9999995 cycles
+	movlw	0x5A
+	movwf	d1
+	movlw	0xCD
+	movwf	d2
+	movlw	0x16
+	movwf	d3
+Delay_5s_0
+	decfsz	d1, f
+	goto	$+2
+	decfsz	d2, f
+	goto	$+2
+	decfsz	d3, f
+	goto	Delay_5s_0
+
+			;1 cycle
 	nop
 
 			;4 cycles (including call)

@@ -11,6 +11,7 @@
 ; main.asm        : 11 bytes 0x20
 ; CRC16           :  4 bytes 0x2c
 ; ChipCap2        : 11 bytes 0x30
+; SHT15           : 10 bytes 0x30
 ; rf_protocol_tx  :  8 bytes 0x40
 ; rf_protocol_rx  : 13 bytes 0x50
 
