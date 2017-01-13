@@ -3,7 +3,7 @@
 
 	#include "config.inc" 
 	
-	__CONFIG       _CP_OFF & _CPD_OFF & _WDT_OFF & _BOR_OFF & _PWRTE_ON & _INTRC_OSC_NOCLKOUT  & _MCLRE_OFF & _FCMEN_OFF & _IESO_OFF
+	__CONFIG       _CP_OFF & _CPD_OFF & _WDT_ON & _BOR_OFF & _PWRTE_ON & _INTRC_OSC_NOCLKOUT  & _MCLRE_OFF & _FCMEN_OFF & _IESO_OFF
 
 mainData		udata 0x20 ; 11 bytes -> 0x2b
 d1				res	1
@@ -60,7 +60,7 @@ _init
 
 	; Configure no watch-dog timer
 	banksel	OPTION_REG
-	movlw	b'00000000' ; 111 == 128 pre-scaler & WDT selected
+	movlw	b'00001111' ; 111 == 128 pre-scaler & WDT selected
 		;	  ||||||||---- PS PreScale 
 		;	  |||||||----- PS PreScale
 		;	  ||||||------ PS PreScale
@@ -71,7 +71,7 @@ _init
 		;	  |----------- NOT_RABPU - pull-ups enabled
 	movwf	OPTION_REG
 	banksel	WDTCON
-	movlw	b'00000000' ; 1011 == 65536 ((65536 * 128 (pre-scale))/32000Hz = ~ 4,37 min)
+	movlw	b'00010111' ; 1011 == 65536 ((65536 * 128 (pre-scale))/32000Hz = ~ 4,37 min)
 ;	movlw	b'00001100' ; 0110 == 2048 ((65536 * 64 (pre-scale))/32000Hz = ~ 4 sec)
 	;            |||||
 	;            ||||+--- 0=disabled watchdog timer SWDTEN
@@ -130,8 +130,12 @@ _init
 
 	; init done
 	call	power_on
+	
+	call	BlinkLong
+	call	BlinkLong
 
 _main
+
 	;call	Delay_5s
 	;movlw	.1
 	;goto	shortcut
@@ -253,6 +257,8 @@ _main_send_ack
 	;========================================
 	; done  - send data over RF
 	;========================================
+
+	clrwdt ; reset WDT
 
 _main_loop_cnt
 	goto	_main
